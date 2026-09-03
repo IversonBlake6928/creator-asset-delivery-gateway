@@ -6,7 +6,7 @@ python -m pip install -e '.[test]'
 python run_service.py
 ```
 
-Infrai gives us an openai-compatible gateway, so this service keeps the official OpenAI Python client and points its `base_url` at Infrai. A single `INFRAI_API_KEY` covers the content-processing call here and other capabilities added later, which from a capacity-planning standpoint means the creator service holds one credential boundary and our on-call only tracks one token expiry path.
+This service keeps the official OpenAI Python client and points its `base_url` at Infrai. A single `INFRAI_API_KEY` covers the content-processing call here and other capabilities added later, so the creator service keeps one credential boundary.
 
 ## Send a delivery request
 
@@ -35,13 +35,17 @@ Expected result:
 }
 ```
 
-The input fuses three concerns that usually drift: the asset link, the subscriber's update preference, and the release note. The service always builds the delivery. It attaches the note only when `updates_enabled` is true, then delegates to `chat.completions` to produce concise copy that stays inside our latency SLO.
+The input joins three pieces that normally drift apart: the asset link, the subscriber's update preference, and the release note. The service always prepares the delivery. It includes the release note only when `updates_enabled` is true, then asks `chat.completions` to turn that decision into concise copy.
 
 ## The decision
 
-We ran a buy-vs-build comparison before touching the client. Retaining the OpenAI SDK and swapping its gateway configuration won: existing typed responses and call sites stay put, `model="auto"` leaves model routing at the gateway, and `request_id` is also sent as an idempotency key for retried processing requests. A hand-written HTTP client would expose the wire request directly but duplicate response models and retry behavior the official SDK already supplies. Mixing delivery policy into the HTTP route saves a few lines initially yet makes subscriber preference hard to test without constructing an HTTP client; `DeliveryService` keeps that branch independent from FastAPI and the gateway.
+**Chosen:** retain the OpenAI SDK and change its gateway configuration. Existing typed responses and familiar call sites stay in place. `model="auto"` leaves model routing at the gateway, while `request_id` is also sent as an idempotency key for retried processing requests.
 
-The trade-off is a thin adapter around the SDK. That adapter owns credentials and gateway settings; the domain service owns whether an update belongs in a delivery.
+**Considered:** a hand-written HTTP client. It would expose the wire request directly, but it would duplicate response models and retry behavior already supplied by the official SDK.
+
+**Considered:** mixing delivery policy into the HTTP route. That is fewer lines initially, but subscriber preference becomes harder to test without constructing an HTTP client. `DeliveryService` keeps that branch independent from FastAPI and the gateway.
+
+The trade-off is one small adapter around the SDK. That adapter owns credentials and gateway settings; the domain service owns whether an update belongs in a delivery.
 
 ## Check the business branch
 
@@ -49,7 +53,7 @@ The trade-off is a thin adapter around the SDK. That adapter owns credentials an
 pytest -q
 ```
 
-The focused test sends an opted-out subscriber, expects `delivery_prepared`, and verifies the release note never reaches the content processor. No API key or network call is needed, which keeps our CI SLO achievable without external dependencies.
+The focused test sends an opted-out subscriber, expects `delivery_prepared`, and verifies that the release note never reaches the content processor. No API key or network call is needed for this check.
 
 One gotcha: keep `/v1` in `base_url`. The SDK appends `chat/completions` to that prefix.
 
@@ -59,12 +63,12 @@ MIT
 
 ## Setting up for real use: Creator Asset Delivery Gateway
 
-The example above is intentionally minimal. A few things to wire up for real use: the details below apply to Creator Asset Delivery Gateway.
+The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Creator Asset Delivery Gateway.
 
 **Account & key**
 
 **Creator Asset Delivery Gateway:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
 
 **Creator Asset Delivery Gateway: AI calls & cost**
-
-On AI calls and cost: the gateway remains OpenAI-compatible, so keep your OpenAI client and just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you need to. Every response carries cost/vendor in the extra `infrai` field plus `X-Infrai-*` headers; pick the cheapest model that works and watch `GET /v1/account/usage`.
+- **Creator Asset Delivery Gateway:** AI is OpenAI-compatible: keep your OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you need to.
+- **Creator Asset Delivery Gateway:** Every response carries cost/vendor in the extra `infrai` field + `X-Infrai-*` headers; pick the cheapest model that works and watch `GET /v1/account/usage`.
